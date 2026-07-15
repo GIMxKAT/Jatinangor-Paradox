@@ -1,0 +1,12 @@
+[package]
+name = "kat-itb/jatinangor-paradox"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+ProfileService = "brittonfischer/profileservice@2.1.5"
+
+[server-dependencies]
+
+[dev-dependencies]

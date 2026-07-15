@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rokit (toolchain manager)
+        run: |
+          curl -sSf https://raw.githubusercontent.com/rojo-rbx/rokit/main/scripts/install.sh | bash
+          echo "$HOME/.rokit/bin" >> $GITHUB_PATH
+
+      - name: Install project toolchain (rojo, wally, selene, stylua)
+        run: rokit install --no-trust-check
+
+      - name: Install Wally packages
+        run: wally install
+
+      - name: Check formatting (StyLua)
+        run: stylua --check src/
+
+      - name: Lint (Selene)
+        run: selene src/ --allow-warnings
+
+      - name: Build check (Rojo)
+        run: rojo build default.project.json --output build.rbxlx
