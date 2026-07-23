@@ -134,6 +134,11 @@ local function beginCountdownIfReady()
             teleportToPlayArea()
         end
         countdownActive = false
+        -- Always clear the countdown display once the loop ends, whether the
+        -- teleport succeeded (players are leaving anyway) or failed (e.g. the
+        -- Studio-only ReserveServer 403) -- otherwise the label freezes on
+        -- "1" forever since no further Lobby_Countdown event would fire.
+        Net.FireClients(FamilyRosterSystem.GetMembers(), RemoteNames.Lobby_Countdown, nil)
     end)
 end
 
