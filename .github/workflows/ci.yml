@@ -29,5 +29,11 @@ jobs:
       - name: Lint (Selene)
         run: selene src/ --allow-warnings
 
-      - name: Build check (Rojo)
-        run: rojo build default.project.json --output build.rbxlx
+      - name: Build check (Rojo) — Hub
+        run: rojo build places/hub.project.json --output build-hub.rbxlx
+
+      - name: Build check (Rojo) — Lobby
+        run: rojo build places/lobby.project.json --output build-lobby.rbxlx
+
+      - name: Build check (Rojo) — PlayArea
+        run: rojo build places/playarea.project.json --output build-playarea.rbxlx

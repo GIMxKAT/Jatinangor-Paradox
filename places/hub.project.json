@@ -1,20 +1,20 @@
 {
-  "name": "JatinangorParadox",
+  "name": "JatinangorParadox-Hub",
   "tree": {
     "$className": "DataModel",
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
       "Shared": {
-        "$path": "src/ReplicatedStorage/Shared"
+        "$path": "../src/Shared"
       },
       "Packages": {
-        "$path": "Packages"
+        "$path": "../Packages"
       }
     },
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "Server": {
-        "$path": "src/ServerScriptService/Server"
+        "$path": "../src/Hub/Server"
       }
     },
     "StarterPlayer": {
@@ -22,7 +22,7 @@
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
         "Client": {
-          "$path": "src/StarterPlayer/StarterPlayerScripts/Client"
+          "$path": "../src/Hub/Client"
         }
       }
     }
