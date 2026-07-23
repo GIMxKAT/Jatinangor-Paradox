@@ -1,11 +1,12 @@
 --!strict
 -- HubUIController
 --
--- Wires the title screen (Create Server / Join Server, per the prerequisite
--- diagram) to MatchmakingSystem on the server. Expects a ScreenGui named
--- "HubUI" built in Studio (StarterGui is not Rojo-synced — see
--- docs/ARCHITECTURE.md §3) with descendants named CreateButton, JoinButton,
--- JoinCodeInput, StartButton, StatusLabel, RosterLabel.
+-- Wires the "Jatinangor Paradox" family-registration screen (Create Family /
+-- Join Family, per the prerequisite diagram) to MatchmakingSystem on the
+-- server. Expects a ScreenGui named "HubGui" built in Studio (StarterGui is
+-- not Rojo-synced -- see docs/ARCHITECTURE.md §3) with descendants named
+-- CreateFamilyButton, JoinFamilyButton, JoinCodeInput, StartFamilyButton,
+-- InviteCodeLabel, RosterList, QueueToast, QueueStatusLabel.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,13 +20,34 @@ local log = Log.new("HubUIController")
 
 local HubUIController = { Name = "HubUIController", Dependencies = {} }
 
+local function setRoster(rosterList: Instance, memberNames: { string })
+    for _, child in rosterList:GetChildren() do
+        if child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+    for i, memberName in memberNames do
+        local label = Instance.new("TextLabel")
+        label.Name = "Member" .. i
+        label.LayoutOrder = i
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.new(1, 0, 0, 20)
+        label.Font = Enum.Font.RobotoMono
+        label.TextSize = 14
+        label.TextColor3 = Color3.fromRGB(235, 235, 240)
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = "- " .. memberName
+        label.Parent = rosterList
+    end
+end
+
 local function bindUI()
     local player = Players.LocalPlayer
     local playerGui = player:WaitForChild("PlayerGui")
-    local hubUI = playerGui:WaitForChild("HubUI", 10)
+    local hubUI = playerGui:WaitForChild("HubGui", 10)
     if not hubUI then
         log:Warn(
-            "HubUI ScreenGui not found in PlayerGui after 10s — title screen will not function"
+            "HubGui ScreenGui not found in PlayerGui after 10s -- family screen will not function"
         )
         return
     end
@@ -34,12 +56,14 @@ local function bindUI()
     uiScale.Parent = hubUI
     uiScale.Scale = Platform.GetRecommendedUIScale()
 
-    local createButton = hubUI:FindFirstChild("CreateButton", true)
-    local joinButton = hubUI:FindFirstChild("JoinButton", true)
+    local createButton = hubUI:FindFirstChild("CreateFamilyButton", true)
+    local joinButton = hubUI:FindFirstChild("JoinFamilyButton", true)
     local joinCodeInput = hubUI:FindFirstChild("JoinCodeInput", true)
-    local startButton = hubUI:FindFirstChild("StartButton", true)
-    local statusLabel = hubUI:FindFirstChild("StatusLabel", true)
-    local rosterLabel = hubUI:FindFirstChild("RosterLabel", true)
+    local startButton = hubUI:FindFirstChild("StartFamilyButton", true)
+    local inviteCodeLabel = hubUI:FindFirstChild("InviteCodeLabel", true)
+    local rosterList = hubUI:FindFirstChild("RosterList", true)
+    local queueToast = hubUI:FindFirstChild("QueueToast", true)
+    local queueStatusLabel = hubUI:FindFirstChild("QueueStatusLabel", true)
 
     if createButton and createButton:IsA("GuiButton") then
         createButton.Activated:Connect(function()
@@ -61,27 +85,46 @@ local function bindUI()
     end
 
     Net.OnClientEvent(RemoteNames.Hub_FamilyUpdated, function(data)
-        if rosterLabel and rosterLabel:IsA("TextLabel") and typeof(data) == "table" then
-            local names = (data :: any).memberNames or {}
-            rosterLabel.Text = ("Invite code: %s\n%s"):format(
-                (data :: any).accessCode or "",
-                table.concat(names, ", ")
-            )
+        if typeof(data) ~= "table" then
+            return
+        end
+        local payload = data :: any
+
+        if inviteCodeLabel and inviteCodeLabel:IsA("TextLabel") then
+            local accessCode = payload.accessCode or ""
+            inviteCodeLabel.Text = ("CODE: %s"):format(accessCode)
+            inviteCodeLabel.Visible = accessCode ~= ""
+        end
+
+        if rosterList then
+            setRoster(rosterList, payload.memberNames or {})
+        end
+
+        if startButton and startButton:IsA("GuiButton") then
+            local leaderUserId = payload.leaderUserId
+            startButton.Visible = leaderUserId ~= nil and leaderUserId == player.UserId
         end
     end)
 
     Net.OnClientEvent(RemoteNames.Hub_QueueStatus, function(data)
-        if statusLabel and statusLabel:IsA("TextLabel") and typeof(data) == "table" then
-            local state = (data :: any).state
-            if state == "WaitingForSlot" then
-                statusLabel.Text = "Waiting for a session slot to open..."
-            elseif state == "InvalidCode" then
-                statusLabel.Text = "That invite code wasn't found."
-            elseif state == "TeleportFailed" then
-                statusLabel.Text = "Couldn't start — please try again."
-            else
-                statusLabel.Text = ""
-            end
+        if typeof(data) ~= "table" then
+            return
+        end
+        local state = (data :: any).state
+        local text = ""
+        if state == "WaitingForSlot" then
+            text = "WAITING FOR SLOT..."
+        elseif state == "InvalidCode" then
+            text = "INVITE CODE NOT FOUND"
+        elseif state == "TeleportFailed" then
+            text = "COULDN'T START -- TRY AGAIN"
+        end
+
+        if queueStatusLabel and queueStatusLabel:IsA("TextLabel") then
+            queueStatusLabel.Text = text
+        end
+        if queueToast and queueToast:IsA("GuiObject") then
+            queueToast.Visible = text ~= ""
         end
     end)
 end
