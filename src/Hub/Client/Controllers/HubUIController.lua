@@ -91,9 +91,9 @@ local function bindUI()
         local payload = data :: any
 
         if inviteCodeLabel and inviteCodeLabel:IsA("TextLabel") then
-            local accessCode = payload.accessCode or ""
-            inviteCodeLabel.Text = ("CODE: %s"):format(accessCode)
-            inviteCodeLabel.Visible = accessCode ~= ""
+            local inviteCode = payload.inviteCode or ""
+            inviteCodeLabel.Text = ("CODE: %s"):format(inviteCode)
+            inviteCodeLabel.Visible = inviteCode ~= ""
         end
 
         if rosterList then

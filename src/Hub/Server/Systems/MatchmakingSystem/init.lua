@@ -41,8 +41,8 @@ local INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" -- no ambiguous 
 local INVITE_CODE_LENGTH = 6
 
 type PendingFamily = {
-    familyId: string,
-    accessCode: string,
+    familyId: string, -- the human-readable invite code (e.g. "8Q6DN2") players type into Hub_JoinFamily; shown to the client as-is
+    accessCode: string, -- Roblox's opaque ReserveServer token; only set once teleportFamily() reserves a Lobby server, never shown to the client
     leaderUserId: number,
     members: { Player },
     cancelled: boolean,
@@ -75,7 +75,7 @@ local function broadcastRoster(family: PendingFamily)
         table.insert(names, p.Name)
     end
     Net.FireClients(family.members, RemoteNames.Hub_FamilyUpdated, {
-        accessCode = family.accessCode,
+        inviteCode = family.familyId,
         leaderUserId = family.leaderUserId,
         memberNames = names,
     })
