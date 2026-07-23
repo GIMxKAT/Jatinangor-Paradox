@@ -1,5 +1,5 @@
 --!strict
--- DataService
+-- DataSystem (PlayArea)
 --
 -- Wraps ProfileService (via Wally) instead of hand-rolled DataStore code.
 -- Session-locking prevents duplication/rollback bugs if a player somehow
@@ -11,36 +11,42 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Log = require(ReplicatedStorage.Shared.Util.Log)
-local log = Log.new("DataService")
+local Signal = require(ReplicatedStorage.Shared.Util.Signal)
+local log = Log.new("DataSystem")
 
--- Installed via Wally: `ProfileService = "alreadypro/profileservice@1.0.4"`
--- Synced in by Rojo from the Packages/ folder wally install creates —
--- see default.project.json's ReplicatedStorage.Packages mapping.
+-- Installed via Wally, synced in by Rojo from the Packages/ folder — see
+-- places/playarea.project.json's ReplicatedStorage.Packages mapping.
 local ProfileService = require(ReplicatedStorage.Packages.ProfileService)
 
-local PROFILE_STORE_NAME = "PlayerData_v1"
+local PROFILE_STORE_NAME = "PlayerData_v2" -- v2: bumped alongside the 5-role migration (see docs/ARCHITECTURE.md changelog)
 
 type ProfileTemplate = {
     role: string?,
-    dimension: string,
     familyId: string,
     joinedAt: number,
 }
 
 local PROFILE_TEMPLATE: ProfileTemplate = {
     role = nil,
-    dimension = "Normal",
     familyId = "",
     joinedAt = 0,
 }
 
 local ProfileStore = ProfileService.GetProfileStore(PROFILE_STORE_NAME, PROFILE_TEMPLATE)
 
-local DataService = {}
+local DataSystem = { Name = "DataSystem", Dependencies = {} }
+
+-- Fired (player) once a profile has finished loading and is safe to read.
+-- Any system that needs profile data on join (RoleSystem's fallback
+-- assignment, analytics, etc.) subscribes to this instead of DataSystem
+-- calling into them directly — keeps DataSystem from having to know who
+-- consumes profile data, which is the whole point of the loose-coupling
+-- rework (see docs/ARCHITECTURE.md §3).
+DataSystem.ProfileLoaded = Signal.new()
 
 local activeProfiles: { [Player]: any } = {}
 
-function DataService.Init(_registry: { [string]: any })
+function DataSystem.Init(_registry: { [string]: any })
     Players.PlayerRemoving:Connect(function(player)
         local profile = activeProfiles[player]
         if profile then
@@ -49,19 +55,19 @@ function DataService.Init(_registry: { [string]: any })
     end)
 end
 
-function DataService.Start()
+function DataSystem.Start()
     Players.PlayerAdded:Connect(function(player)
-        DataService.LoadProfile(player)
+        DataSystem.LoadProfile(player)
     end)
 
-    -- Handle players who joined before this Service started (rare, but
+    -- Handle players who joined before this System started (rare, but
     -- possible depending on script execution order).
     for _, player in Players:GetPlayers() do
-        task.spawn(DataService.LoadProfile, player)
+        task.spawn(DataSystem.LoadProfile, player)
     end
 end
 
-function DataService.LoadProfile(player: Player)
+function DataSystem.LoadProfile(player: Player)
     local profile = ProfileStore:LoadProfileAsync(("Player_%d"):format(player.UserId))
 
     if not profile then
@@ -88,16 +94,17 @@ function DataService.LoadProfile(player: Player)
 
     activeProfiles[player] = profile
     log:Info(("Profile loaded for %s"):format(player.Name))
+    DataSystem.ProfileLoaded:Fire(player)
 end
 
-function DataService.GetProfile(player: Player)
+function DataSystem.GetProfile(player: Player)
     return activeProfiles[player]
 end
 
-function DataService.SaveAll()
+function DataSystem.SaveAll()
     for _player, profile in activeProfiles do
         profile:Release()
     end
 end
 
-return DataService
+return DataSystem
