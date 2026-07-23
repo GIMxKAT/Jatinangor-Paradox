@@ -204,7 +204,7 @@ local function teleportFamily(family: PendingFamily)
     -- admission slot stays held for the family's entire Lobby+PlayArea
     -- session; PlayArea's GameSystem releases it on session end (see
     -- docs/ARCHITECTURE.md §8.3 for the known crash-before-release gap).
-    pendingByCode[family.accessCode] = nil -- stop tracking as a Hub-local pending family
+    pendingByCode[family.familyId] = nil -- stop tracking as a Hub-local pending family
     for _, p in family.members do
         codeByPlayer[p] = nil
     end
