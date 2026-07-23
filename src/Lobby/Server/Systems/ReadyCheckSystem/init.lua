@@ -51,9 +51,13 @@ end
 
 local function broadcastReadyState()
     local roster = FamilyRosterSystem.GetRoster()
-    local state: { [number]: boolean } = {}
+    -- Keyed by tostring(UserId), not UserId itself: numeric dictionary keys
+    -- don't reliably survive a RemoteEvent round-trip (the client can end up
+    -- reading back string keys), so every UserId-keyed payload in this
+    -- codebase uses string keys on both ends.
+    local state: { [string]: boolean } = {}
     for player, member in roster do
-        state[player.UserId] = member.ready
+        state[tostring(player.UserId)] = member.ready
     end
     Net.FireClients(FamilyRosterSystem.GetMembers(), RemoteNames.Lobby_ReadyStateUpdated, state)
 end

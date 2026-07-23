@@ -41,10 +41,12 @@ local FamilyRosterSystem: any
 
 local function broadcastAssignments()
     local roster = FamilyRosterSystem.GetRoster()
-    local assignments: { [number]: string } = {}
+    -- Keyed by tostring(UserId) -- see ReadyCheckSystem.broadcastReadyState
+    -- for why numeric UserId keys don't survive a RemoteEvent round-trip.
+    local assignments: { [string]: string } = {}
     for player, member in roster do
         if member.assignedRole then
-            assignments[player.UserId] = member.assignedRole
+            assignments[tostring(player.UserId)] = member.assignedRole
         end
     end
     Net.FireClients(
