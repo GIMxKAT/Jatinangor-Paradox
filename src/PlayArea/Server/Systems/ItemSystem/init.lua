@@ -68,6 +68,17 @@ local function registerInstance(instance: Instance)
         return
     end
 
+    if placedItems[worldItemId] then
+        log:Warn(
+            ("Instance %s has WorldItemId '%s', already registered by %s — skipping (WorldItemId must be unique per placed instance)"):format(
+                instance:GetFullName(),
+                worldItemId,
+                placedItems[worldItemId].instance:GetFullName()
+            )
+        )
+        return
+    end
+
     placedItems[worldItemId] = {
         instance = instance,
         worldItemId = worldItemId,
