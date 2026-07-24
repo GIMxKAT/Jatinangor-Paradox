@@ -61,7 +61,12 @@
 -- that same familyId then sees "already claimed" and returns true without
 -- ever incrementing the counter — an under-count, not an over-count, and
 -- self-heals once that claim's TTL expires. Same v1.1 reconciliation-job
--- scope as the gap above; not solved here for the same reason.
+-- scope as the gap above; not solved here for the same reason. This same
+-- leftover-claim state is also reachable WITHOUT a crash, if the
+-- compensating RemoveAsync rollback (cap-full / counter-UpdateAsync-failed
+-- paths) itself fails — rollbackClaim() retries a few times and logs loudly
+-- if it still can't clean up, since that path doesn't need an actual server
+-- crash to trigger, just an ordinary transient MemoryStore error.
 
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -76,7 +81,39 @@ local EFFECTIVE_CAP = math.floor(
     SessionConstants.MAX_CONCURRENT_SESSIONS * (1 + SessionConstants.RESERVE_BUFFER_PERCENT)
 )
 
+local ROLLBACK_RETRY_ATTEMPTS = 3
+local ROLLBACK_RETRY_BACKOFF_SECONDS = 0.5
+
 local SessionAdmission = {}
+
+-- Best-effort rollback of a provisional claim (see TryAdmit below). A few
+-- quick retries meaningfully shrink the window where a transient
+-- RemoveAsync failure leaves a claim behind with no matching counter
+-- increment -- if a future TryAdmit(familyId) then sees that leftover claim,
+-- it treats the family as already-admitted without ever having incremented
+-- the counter, silently bypassing the cap for that family. Not a full fix
+-- (a hard crash mid-rollback is still possible, same as the KNOWN GAP notes
+-- above), just cheap reliability hygiene against ordinary transient errors.
+local function rollbackClaim(familyId: string)
+    for attempt = 1, ROLLBACK_RETRY_ATTEMPTS do
+        local removeOk = pcall(function()
+            claimsMap:RemoveAsync(familyId)
+        end)
+        if removeOk then
+            return
+        end
+        if attempt < ROLLBACK_RETRY_ATTEMPTS then
+            task.wait(ROLLBACK_RETRY_BACKOFF_SECONDS)
+        end
+    end
+    log:Error(
+        ("RemoveAsync (claim rollback) failed %d/%d times for family %s — a leftover claim may block/short-circuit this family's next TryAdmit until its TTL expires"):format(
+            ROLLBACK_RETRY_ATTEMPTS,
+            ROLLBACK_RETRY_ATTEMPTS,
+            familyId
+        )
+    )
+end
 
 -- Attempts to admit `familyId`. Returns true if a slot was claimed (caller
 -- may proceed to ReserveServer + Teleport), false if the cap is currently
@@ -140,18 +177,14 @@ function SessionAdmission.TryAdmit(familyId: string): boolean
                 tostring(err)
             )
         )
-        pcall(function()
-            claimsMap:RemoveAsync(familyId)
-        end) -- roll back the provisional claim so a later retry for this family isn't blocked forever
+        rollbackClaim(familyId)
         return false
     end
 
     if not admitted then
         -- Cap is full: roll back the provisional claim so tryStartFamily's
         -- retry loop (Hub) can try this same family again once a slot frees.
-        pcall(function()
-            claimsMap:RemoveAsync(familyId)
-        end)
+        rollbackClaim(familyId)
         return false
     end
 
