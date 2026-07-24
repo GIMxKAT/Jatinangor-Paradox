@@ -23,6 +23,7 @@
 -- This guarantees no role exceeds the ceiling by more than one member and
 -- respects preference whenever the family size allows it.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RemoteNames = require(ReplicatedStorage.Shared.Constants.RemoteNames)
@@ -121,6 +122,26 @@ function RoleBalancingSystem.Start()
             RoleBalancingSystem.AutoBalance() -- re-balance live so the UI updates as preferences change
         end
     end)
+
+    -- Assignment was previously ONLY triggered by a client picking a
+    -- preference, so a player who never touches a role button kept
+    -- assignedRole == nil forever, and ReadyCheckSystem.allReady() requires
+    -- every member to have one -- silently blocking the whole family from
+    -- ever reaching PlayArea. Re-balance on every roster change too, so
+    -- everyone always has SOME assigned role by default. Connected here
+    -- (not in FamilyRosterSystem) so it runs after FamilyRosterSystem's own
+    -- PlayerAdded/PlayerRemoving handlers -- Dependencies = {
+    -- "FamilyRosterSystem" } guarantees FamilyRosterSystem.Start() (and
+    -- thus its connections) runs first, so roster[player] is already
+    -- populated/cleared by the time these fire.
+    Players.PlayerAdded:Connect(function()
+        RoleBalancingSystem.AutoBalance()
+    end)
+    Players.PlayerRemoving:Connect(function()
+        RoleBalancingSystem.AutoBalance()
+    end)
+
+    RoleBalancingSystem.AutoBalance() -- seed assignments for anyone already connected when this system starts
 end
 
 return RoleBalancingSystem
