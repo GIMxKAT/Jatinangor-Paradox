@@ -52,7 +52,17 @@ end
 local function loadSystems(container: Instance): { GameSystem }
     local systems: { GameSystem } = {}
 
-    for _, child in container:GetChildren() do
+    -- GetChildren() order isn't part of the Instance API's contract, so
+    -- relying on it directly would make "systems with no relationship boot
+    -- in declaration order (stable)" (see topoSort below) a false promise.
+    -- Sorting by Name gives loadSystems() itself a deterministic, repeatable
+    -- discovery order to hand to topoSort.
+    local children = container:GetChildren()
+    table.sort(children, function(a, b)
+        return a.Name < b.Name
+    end)
+
+    for _, child in children do
         local moduleScript = resolveModule(child)
         if moduleScript then
             local ok, result = pcall(require, moduleScript)
