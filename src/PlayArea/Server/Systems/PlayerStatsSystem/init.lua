@@ -93,6 +93,7 @@ function PlayerStatsSystem.Start()
     end)
     for _, player in Players:GetPlayers() do
         health[player] = MAX_HEALTH
+        broadcast(player)
     end
 
     Players.PlayerRemoving:Connect(function(player)
