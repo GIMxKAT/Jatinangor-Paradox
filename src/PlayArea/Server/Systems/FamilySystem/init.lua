@@ -20,25 +20,35 @@ local FamilySystem = { Name = "FamilySystem", Dependencies = {} }
 local familyId: string = "unknown-family"
 local roleAssignmentsFromLobby: { [number]: string } = {}
 
-function FamilySystem.Init(_registry: { [string]: any })
-    local localPlayers = Players:GetPlayers()
-    for _, player in localPlayers do
-        local joinData = player:GetJoinData()
-        local teleportData = joinData and joinData.TeleportData
-        if teleportData and typeof(teleportData) == "table" then
-            if typeof(teleportData.familyId) == "string" then
-                familyId = teleportData.familyId
-            end
-            if typeof(teleportData.roleAssignments) == "table" then
-                for userIdStr, role in teleportData.roleAssignments :: any do
-                    roleAssignmentsFromLobby[tonumber(userIdStr) or userIdStr] = role
-                end
+-- Init() runs at server boot, before TeleportService has delivered any
+-- teleporting player -- Players:GetPlayers() is reliably empty there, so
+-- reading TeleportData only in Init() meant familyId/roleAssignments never
+-- actually populated on a live server. Ingest per-player instead, on
+-- PlayerAdded (and once for whoever is already present when Start() runs,
+-- covering any player that connected between Init and Start).
+local function ingestTeleportData(player: Player)
+    local joinData = player:GetJoinData()
+    local teleportData = joinData and joinData.TeleportData
+    if teleportData and typeof(teleportData) == "table" then
+        if typeof(teleportData.familyId) == "string" then
+            familyId = teleportData.familyId
+        end
+        if typeof(teleportData.roleAssignments) == "table" then
+            for userIdStr, role in teleportData.roleAssignments :: any do
+                roleAssignmentsFromLobby[tonumber(userIdStr) or userIdStr] = role
             end
         end
     end
 end
 
-function FamilySystem.Start() end
+function FamilySystem.Init(_registry: { [string]: any }) end
+
+function FamilySystem.Start()
+    Players.PlayerAdded:Connect(ingestTeleportData)
+    for _, player in Players:GetPlayers() do
+        ingestTeleportData(player)
+    end
+end
 
 function FamilySystem.GetFamilyId(): string
     return familyId
