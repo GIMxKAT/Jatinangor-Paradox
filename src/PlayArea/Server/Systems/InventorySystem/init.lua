@@ -21,6 +21,7 @@
 -- this System single-responsibility is what lets it be swapped
 -- independently of every item's actual behavior.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RemoteNames = require(ReplicatedStorage.Shared.Constants.RemoteNames)
@@ -34,8 +35,17 @@ local InventorySystem = { Name = "InventorySystem", Dependencies = { "FamilySyst
 local FamilySystem: any
 local itemCounts: { [string]: number } = {}
 
+-- Only AddItem/RemoveItem broadcast on their own; a player who joins after
+-- items already exist (or is already connected when Start() runs, before
+-- anyone mutates the inventory) would otherwise never learn the current
+-- state until the next mutation. Send the current snapshot to everyone
+-- present now, plus every future joiner individually.
 local function broadcast()
     Net.FireClients(FamilySystem.GetFamilyPlayers(), RemoteNames.Inventory_Updated, itemCounts)
+end
+
+local function broadcastTo(player: Player)
+    Net.FireClient(player, RemoteNames.Inventory_Updated, itemCounts)
 end
 
 function InventorySystem.GetFamilyInventory(): { [string]: number }
@@ -69,6 +79,11 @@ function InventorySystem.Init(registry: { [string]: any })
 end
 
 function InventorySystem.Start()
+    Players.PlayerAdded:Connect(broadcastTo)
+    for _, player in Players:GetPlayers() do
+        broadcastTo(player)
+    end
+
     Net.OnServerEvent(RemoteNames.Inventory_UseItem, function(_player, itemId)
         if typeof(itemId) ~= "string" then
             return
