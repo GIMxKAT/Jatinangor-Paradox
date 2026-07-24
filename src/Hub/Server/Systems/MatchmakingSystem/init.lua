@@ -46,6 +46,7 @@ type PendingFamily = {
     leaderUserId: number,
     members: { Player },
     cancelled: boolean,
+    starting: boolean, -- true while a tryStartFamily() attempt loop is in flight; guards against duplicate Hub_StartFamily fires spawning concurrent admission loops for the same family
 }
 
 local MatchmakingSystem =
@@ -123,6 +124,7 @@ local function handleCreateFamily(player: Player)
         leaderUserId = player.UserId,
         members = { player },
         cancelled = false,
+        starting = false,
     }
     pendingByCode[code] = family
     codeByPlayer[player] = code
@@ -172,6 +174,7 @@ local function teleportFamily(family: PendingFamily)
             )
         )
         SessionAdmissionSystem.Release(family.familyId)
+        family.starting = false -- let the leader retry Hub_StartFamily instead of being stuck forever
         Net.FireClients(family.members, RemoteNames.Hub_QueueStatus, { state = "TeleportFailed" })
         return
     end
@@ -196,6 +199,7 @@ local function teleportFamily(family: PendingFamily)
             )
         )
         SessionAdmissionSystem.Release(family.familyId)
+        family.starting = false -- let the leader retry Hub_StartFamily instead of being stuck forever
         Net.FireClients(family.members, RemoteNames.Hub_QueueStatus, { state = "TeleportFailed" })
         return
     end
@@ -237,7 +241,11 @@ local function handleStartFamily(player: Player)
     if family.leaderUserId ~= player.UserId then
         return -- only the leader may start the session
     end
+    if family.starting then
+        return -- an admission attempt loop is already in flight for this family
+    end
 
+    family.starting = true
     tryStartFamily(family)
 end
 
