@@ -1,8 +1,14 @@
 # Jatinangor Paradox
 
-> **Roblox collaborative puzzle-escape game** — built for KAT ITB OSKM 2026.  
-> A family of ~20–25 players must cooperate across two overlapping dimensions
-> (Normal & Alter) to stabilise a portal and escape. Target release: **14–17 Aug 2026**.
+> **Roblox collaborative puzzle-escape game** — built for KAT ITB OSKM 2026.
+> A family of ~20–25 players cooperates across a five-role team (Navigator,
+> Detective, Scout, Code-Breaker, Support) to escape. Cross-platform
+> (PC/mobile/console). Target release: **14–17 Aug 2026**.
+>
+> **v2 architecture** — the game is now three Roblox places (Hub → Lobby →
+> PlayArea) instead of one. **Read
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing any
+> System/Controller code** — this README is quick-start only.
 
 ---
 
@@ -15,17 +21,11 @@
 5. [Day-to-Day Workflow](#5-day-to-day-workflow)
 6. [Repository Layout](#6-repository-layout)
 7. [Architecture in Plain English](#7-architecture-in-plain-english)
-   - [The Golden Rule: Server-Authoritative](#71-the-golden-rule-server-authoritative)
-   - [Service / Controller Pattern](#72-service--controller-pattern)
-   - [Bootstrap Order](#73-bootstrap-order)
-   - [The Net Module](#74-the-net-module)
-   - [How a Puzzle Interaction Flows](#75-how-a-puzzle-interaction-flows)
-8. [Adding Content (No-Code Paths)](#8-adding-content-no-code-paths)
+8. [Adding Content (No-Code / One-File Paths)](#8-adding-content-no-code--one-file-paths)
 9. [Coding Standards](#9-coding-standards)
 10. [CI Pipeline](#10-ci-pipeline)
-11. [Known TODOs (Active Work)](#11-known-todos-active-work)
-12. [Team & Responsibilities](#12-team--responsibilities)
-13. [FAQ for Programmers](#13-faq-for-junior-scripters)
+11. [Team & Responsibilities](#11-team--responsibilities)
+12. [FAQ for Programmers](#12-faq-for-programmers)
 
 ---
 
@@ -34,17 +34,21 @@
 | Property | Value |
 |---|---|
 | Engine | Roblox (Luau / `--!strict`) |
+| Places | **Hub** (public matchmaking) → **Lobby** (reserved, role balancing) → **PlayArea** (reserved, the actual game) |
 | Toolchain manager | [Rokit](https://github.com/rojo-rbx/rokit) |
 | Studio sync | [Rojo 7](https://rojo.space) |
 | Package manager | [Wally](https://wally.run) |
-| Key dependencies | ProfileService (DataStore wrapper), custom Signal/Maid/Log utilities |
+| Key dependencies | ProfileService (DataStore wrapper), MemoryStoreService (session admission), custom Signal/Maid/Log utilities |
 | Linter / formatter | Selene + StyLua (enforced in CI) |
-| Server model | 1 server instance = 1 reserved family session (~20–25 players) |
+| Roles | Navigator, Detective, Scout, Code-Breaker, Support — data-driven, scalable skill system |
+| Capacity | ~200-250 family sessions total over the 3-day event, ~50 (+10%) concurrent, race-safe admission control |
 
-The full technical design — data models, data-flow diagrams, scalability
-rationale — lives in [`ARCHITECTURE.md`](ARCHITECTURE.md). **Read that
-document before writing any Service or Controller code.** This README is
-the quick-start and day-to-day reference.
+The full technical design — place topology, the loose-coupling plugin
+architecture, data-flow diagrams, session-admission race-condition
+analysis, API catalogue — lives in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). **Read that document before
+writing any Service or Controller code.** This README is the quick-start
+and day-to-day reference.
 
 ---
 
@@ -56,7 +60,7 @@ the quick-start and day-to-day reference.
 | Resource | What it's for | Link |
 |---|---|---|
 | 📋 **Notion Workspace** | Milestone tracker, sprint kanban, decision log, meeting notes | [Open Notion →](https://app.notion.com/p/Jatinangor-Paradox-Project-Hub-39eae794b663805a9c1fd8466ecec462?source=copy_link) |
-| 🧩 **Puzzle Content Tracker** | Mechanism IDs, roles, dimensions, studio tagging status | [Open Sheets →](https://docs.google.com/spreadsheets/d/1qF3Y-30h0lpJIHFaevTiGcktnLVUEKFXPCJc8-GwRe8/edit?gid=0#gid=0) |
+| 🧩 **Puzzle Content Tracker** | Mechanism/item/minigame IDs, roles, Studio tagging status | [Open Sheets →](https://docs.google.com/spreadsheets/d/1qF3Y-30h0lpJIHFaevTiGcktnLVUEKFXPCJc8-GwRe8/edit?gid=0#gid=0) |
 | 📔 **Journal Fragment Tracker** | Fragment IDs, locations, tagging status | [Open Sheets →](https://docs.google.com/spreadsheets/d/1qF3Y-30h0lpJIHFaevTiGcktnLVUEKFXPCJc8-GwRe8/edit?gid=1338519728#gid=1338519728) |
 | 🐛 **Bug Tracker** | Bug reports, severity, assignments, fix status | [Open Sheets →](https://docs.google.com/spreadsheets/d/1qF3Y-30h0lpJIHFaevTiGcktnLVUEKFXPCJc8-GwRe8/edit?gid=1893503894#gid=1893503894) |
 
@@ -75,6 +79,14 @@ Install these once on your machine:
 
 > **macOS / Linux** users: ensure your shell's `$PATH` includes `~/.rokit/bin`
 > after installation (the installer prints this instruction).
+
+**One-time, ops-only setup (not a repo/CLI step):** the game needs a
+multi-place Roblox Universe with three Places (Hub, Lobby, PlayArea)
+created in Studio or the Creator Dashboard. Once created, set the real
+PlaceIds in `Hub/Server/Systems/MatchmakingSystem/init.lua`
+(`LOBBY_PLACE_ID`) and `Lobby/Server/Systems/ReadyCheckSystem/init.lua`
+(`PLAYAREA_PLACE_ID`) — both are `0` by default, which fails loudly rather
+than silently teleporting players somewhere wrong.
 
 ---
 
@@ -95,29 +107,31 @@ git clone <repo-url>
 cd jatinangor-paradox
 
 # 3. Install the pinned toolchain (rojo, wally, selene, stylua)
-#    --accept-all-tool-trust skips the interactive trust prompt for each tool
-rokit install --accept-all-tool-trust
+rokit install --no-trust-check
 
 # 4. Install Wally packages (ProfileService → Packages/ folder)
 wally install
 
-# 5. Verify the build compiles cleanly
-rojo build default.project.json --output build.rbxlx
-#    You should see no errors. The .rbxlx file is git-ignored; delete it.
+# 5. Verify each place builds cleanly
+rojo build places/hub.project.json      --output build-hub.rbxlx
+rojo build places/lobby.project.json    --output build-lobby.rbxlx
+rojo build places/playarea.project.json --output build-playarea.rbxlx
+#    You should see no errors. The .rbxlx files are git-ignored; delete them.
 ```
 
-**Connecting to Roblox Studio:**
+**Connecting to Roblox Studio:** open the Place file for whichever leg
+you're working on (Hub / Lobby / PlayArea) in Studio, then:
 
 ```bash
-# 6. Start the Rojo dev server (keep this terminal open)
-rojo serve
+# 6. Start the Rojo dev server against that place's project file
+rojo serve places/playarea.project.json   # or hub / lobby
 
 # 7. In Roblox Studio: open the Rojo plugin → click Connect (default port 34872)
 #    → click Sync In.
 #    Your src/ files now live in the DataModel and hot-reload on every save.
 ```
 
-> **Why Rojo instead of editing directly in Studio?**  
+> **Why Rojo instead of editing directly in Studio?**
 > Rojo gives us real files, real Git diffs, and real PR reviews. Without it,
 > every change to a Script is a binary blob in a `.rbxl` that nobody can
 > review or merge. This is the single highest-leverage tooling choice for a
@@ -140,11 +154,8 @@ Write code in VS Code  →  Rojo hot-syncs to Studio  →  Test in Play mode
 ### Before you push
 
 ```bash
-# Format your code (CI will reject unformatted code)
-stylua src/
-
-# Lint your code (CI will reject lint errors)
-selene src/
+stylua src/                 # CI will reject unformatted code
+selene src/                 # CI will reject lint errors
 ```
 
 ### Branch naming convention
@@ -157,10 +168,11 @@ content/<short-description>   # data/config-only change (no logic)
 
 ### Pull Request rules
 
-- **One PR = one system change.** Keep PRs small and reviewable same-day.
-- Server-authoritative logic is a **hard blocker** in review, not a nitpick.
-  If a PR lets the client decide any gameplay outcome, it will be rejected.
-  (See §6.1 for what this means.)
+- **One PR = one system change.** Since v2's plugin architecture puts each
+  system in its own folder, this is now easy to actually enforce.
+- Server-authoritative logic is a **hard blocker** in review, not a
+  nitpick. If a PR lets the client decide any gameplay outcome, it will be
+  rejected. (See §7.1.)
 - Tag your PR with `needs-review` and post in the team chat.
 
 ---
@@ -169,60 +181,48 @@ content/<short-description>   # data/config-only change (no logic)
 
 ```
 jatinangor-paradox/
-├── .github/
-│   └── workflows/
-│       └── ci.yml              # GitHub Actions: format + lint + build on every PR
-├── .gitignore                  # Ignores *.rbxl, build artefacts, Packages/
-├── ARCHITECTURE.md             # Full technical design — read this first!
-├── README.md                   # This file
-├── default.project.json        # Rojo mapping: src/ folders → Roblox DataModel
-├── rokit.toml                  # Pinned versions of rojo/wally/selene/stylua
-├── wally.toml                  # Lua package dependencies (ProfileService, etc.)
-├── wally.lock                  # Auto-generated; commit this, don't edit by hand
-├── selene.toml                 # Linter rules
-├── stylua.toml                 # Formatter rules
-├── Packages/                   # Auto-generated by `wally install`; git-ignored
+├── .github/workflows/ci.yml    # lint + format + build (all 3 places) on every PR
+├── docs/
+│   └── ARCHITECTURE.md         # full technical design — read this first!
+├── places/
+│   ├── hub.project.json        # Rojo mapping for the Hub place
+│   ├── lobby.project.json      # Rojo mapping for the Lobby place
+│   └── playarea.project.json   # Rojo mapping for the PlayArea place
+├── rokit.toml / wally.toml / wally.lock / selene.toml / stylua.toml
+├── Packages/                   # auto-generated by `wally install`; git-ignored
 └── src/
-    ├── ReplicatedStorage/
-    │   └── Shared/             # Required by BOTH server and client
-    │       ├── Constants/
-    │       │   ├── DimensionConstants.lua   # "Normal" | "Alter" + exported type
-    │       │   ├── RemoteNames.lua          # Every RemoteEvent name as a constant
-    │       │   └── RoleConstants.lua        # "Merah" | "Kuning" | "Hijau" + type
-    │       ├── Net/
-    │       │   └── Net.lua                  # The ONLY place that touches RemoteEvents
-    │       ├── Types/
-    │       │   └── Types.lua                # Shared Luau type definitions
-    │       └── Util/
-    │           ├── Log.lua                  # Timestamped, tagged logging
-    │           ├── Maid.lua                 # Connection/instance cleanup
-    │           └── Signal.lua              # Lightweight typed event system
+    ├── Shared/                 # ReplicatedStorage in every place — required by both sides
+    │   ├── Constants/          # RoleConstants, RemoteNames, SessionConstants
+    │   ├── Content/            # RoleDefinitions.lua (role display + skill mapping, DATA)
+    │   ├── Types/               # shared Luau type defs, incl. content-plugin contracts
+    │   ├── Net/                 # the ONLY module allowed to touch RemoteEvents
+    │   ├── Platform/            # cross-platform input/UI-scale detection
+    │   ├── Registry/            # PluginRegistry (Systems) + ContentRegistry (content plugins)
+    │   ├── Session/             # SessionAdmission — race-safe MemoryStore admission control
+    │   └── Util/                # Log, Maid, Signal
     │
-    ├── ServerScriptService/
-    │   └── Server/
-    │       ├── init.server.lua             # Bootstrap: loads all Services in order
-    │       ├── Content/
-    │       │   └── PuzzleDefinitions.lua   # Data-driven puzzle group configs
-    │       └── Services/                   # Server-side domain singletons
-    │           ├── DataService.lua         # Profile load/save via ProfileService
-    │           ├── DimensionService.lua    # Normal ↔ Alter dimension state
-    │           ├── GameService.lua         # Session state machine (Lobby→InProgress→Won)
-    │           ├── JournalService.lua      # Shared journal fragment collection
-    │           ├── PlayerService.lua       # Family grouping + player list
-    │           ├── PuzzleService.lua       # Mechanism state + interaction validation
-    │           └── RoleService.lua         # Role assignment + authorization
+    ├── Hub/
+    │   ├── Server/Systems/       # MatchmakingSystem, SessionAdmissionSystem
+    │   └── Client/Controllers/   # HubUIController (Create/Join/Start)
     │
-    └── StarterPlayer/
-        └── StarterPlayerScripts/
-            └── Client/
-                ├── init.client.lua         # Bootstrap: loads all Controllers in order
-                └── Controllers/            # Client-side domain singletons
-                    ├── DimensionController.lua
-                    ├── JournalController.lua
-                    ├── PuzzleController.lua
-                    ├── RoleController.lua
-                    └── UIController.lua    # Wires all UI to Controller signals
+    ├── Lobby/
+    │   ├── Server/Systems/       # FamilyRosterSystem, RoleBalancingSystem, ReadyCheckSystem
+    │   └── Client/Controllers/   # LobbyController (role/ready UI)
+    │
+    └── PlayArea/
+        ├── Server/
+        │   ├── Systems/           # DataSystem, FamilySystem, RoleSystem, SkillSystem,
+        │   │                      # PlayerStatsSystem, InventorySystem, ItemSystem,
+        │   │                      # DoorLockSystem, DialogSystem, EntityAISystem,
+        │   │                      # MinigameSystem, JournalSystem, GameSystem
+        │   │                      # (each Systems/<Name>/ may contain its own content
+        │   │                      #  plugin subfolder, e.g. ItemSystem/Items/*)
+        │   └── Content/           # MechanismDefinitions.lua (data-driven puzzle groups)
+        └── Client/Controllers/    # one Controller per System, same names
 ```
+
+See [`docs/ARCHITECTURE.md` §4](docs/ARCHITECTURE.md#4-component-structure)
+for the full component diagrams per place.
 
 ---
 
@@ -230,169 +230,69 @@ jatinangor-paradox/
 
 ### 7.1 The Golden Rule: Server-Authoritative
 
-> **The client never decides who has a role, what dimension a player is in,
-> or whether a mechanism activates. It only *requests* and *renders*.**
+> **The client never decides who has a role, whether a mechanism/item/
+> skill/minigame attempt succeeded, or when the session ends. It only
+> *requests* and *renders*.**
 
-This is the most important rule in the codebase. Treat every value the client
-sends as potentially forged by an exploiter. Every gameplay-affecting decision
-must be **re-validated on the server** before state changes.
+Treat every value the client sends as potentially forged. Every
+gameplay-affecting decision is **re-validated on the server** — see
+[`docs/ARCHITECTURE.md` §6.4](docs/ARCHITECTURE.md#64-item--mechanism--minigame--dialog-interaction-shared-shape)
+for the exact shape every interaction follows.
 
-Concrete examples:
+### 7.2 Loose coupling: "add a folder," not "edit a shared file"
 
-| ❌ Client does this (BAD) | ✅ Server does this (GOOD) |
-|---|---|
-| `mechanism.Activated = true` | Client fires `Net.FireServer("Puzzle_Interact", id)`, server validates and mutates state |
-| Reads its own role from an Attribute and gates gameplay | Server re-calls `RoleService.CanAccess(player, role)` on every interaction |
-| Checks its own position before sending | Server re-checks `(rootPart.Position - mechanismPart.Position).Magnitude` |
+v1 had a hand-written registry table in `init.server.lua` that every
+programmer edited to register their own system — a merge-conflict
+bottleneck. v2 replaces it with **`PluginRegistry.DiscoverAndBoot`**:
+every place's bootstrap scans a `Systems/` (or `Controllers/`) folder,
+`require`s every module found there, and boots each one through the same
+two-phase `Init`/`Start` pattern as before — automatically, in dependency
+order. Adding a system is dropping a folder in; nobody edits a shared
+bootstrap file. Content (a specific item/skill/minigame/AI entity/dialog
+tree) works the same way one level down via **`ContentRegistry.Load`**.
+Full rationale and the exact contracts: **[`docs/ARCHITECTURE.md`
+§3](docs/ARCHITECTURE.md#3-loose-coupling-pluginregistry-and-contentregistry)**.
 
-### 7.2 Service / Controller Pattern
+### 7.3 Three places, one family, one `familyId`
 
-Each domain of the game is owned by exactly one **Service** (server) and one
-**Controller** (client). They are singletons — `require` returns the same table
-every time.
-
-```
-Server (ServerScriptService)         Client (StarterPlayerScripts)
-────────────────────────────         ──────────────────────────────
-DataService       (profiles)         RoleController     (my role)
-PlayerService     (family list)      DimensionController (my dimension)
-RoleService       (assignments)      PuzzleController    (interact UI)
-DimensionService  (dimensions)       JournalController   (fragment UI)
-PuzzleService     (mechanisms)       UIController        (wires all UI)
-JournalService    (fragments)
-GameService       (win condition)
-```
-
-Services talk to each other through the **ServiceRegistry** table injected
-at `Init` time — never via raw `require` across files. This prevents the
-circular dependency trap.
-
-Controllers do the same through the **ControllerRegistry**.
-
-### 7.3 Bootstrap Order
-
-Both `init.server.lua` and `init.client.lua` use the same two-phase pattern:
-
-```
-Phase 1 — Init:   every module receives the registry and saves references.
-                  No inter-service calls yet.
-
-Phase 2 — Start:  every module connects events, starts listening to Remotes,
-                  and fires initial state.
-```
-
-**Why two phases?** If `RoleService.Init` called `DataService.GetProfile()`
-immediately, it would fail because `DataService` might not have loaded
-profiles yet. The split guarantees all modules are constructed before any of
-them try to call each other.
-
-```lua
--- init.server.lua (simplified)
-local ServiceRegistry = { Data = DataService, Role = RoleService, ... }
-
-for name, service in ServiceRegistry do
-    service.Init(ServiceRegistry)   -- Phase 1: store refs, no cross-calls
-end
-
-for name, service in ServiceRegistry do
-    service.Start()                 -- Phase 2: connect events, start logic
-end
-
-game:BindToClose(function()
-    DataService.SaveAll()           -- Graceful shutdown: release all profiles
-end)
-```
+A player's journey is Hub (public, pick/create a family via invite code) →
+Lobby (reserved server, role-balance + ready check) → PlayArea (a fresh
+reserved server, the actual game). Each place-to-place hop mints its own
+`TeleportService:ReserveServer` reservation — access codes are scoped to
+one specific place, they don't carry over — but `familyId` (an app-level
+id, carried in `TeleportData`) threads the whole journey together. Full
+sequence diagrams: **[`docs/ARCHITECTURE.md`
+§6](docs/ARCHITECTURE.md#6-data-flow-walkthroughs)**.
 
 ### 7.4 The Net Module
 
 `Shared/Net/Net.lua` is the **only** module allowed to create or touch
-`RemoteEvent` instances. Services and Controllers never call
-`RemoteEvent:FireServer()` directly.
-
-```lua
--- ✅ Correct
-Net.FireServer(RemoteNames.Puzzle_Interact, mechanismId)
-Net.OnServerEvent(RemoteNames.Puzzle_Interact, function(player, id) ... end)
-
--- ❌ Wrong
-game.ReplicatedStorage.Remotes.Puzzle_Interact:FireServer(mechanismId)
-```
-
-**Why?** Net gives us three things for free on every remote:
-1. **Known-remote assertion** — a typo in a remote name throws immediately
-   instead of silently doing nothing.
-2. **Rate limiting** — built-in per-player, per-remote throttle (default 10
-   calls/sec). Prevents both exploit spam and accidental UI-loop bugs.
-3. **One place to add logging/metrics** — add `print(remoteName)` in Net once
-   and every remote is logged. No need to touch 20 Service files.
-
-Remote names are declared once in `Constants/RemoteNames.lua`. **Never use a
-magic string remote name anywhere else in the codebase.**
-
-### 7.5 How a Puzzle Interaction Flows
-
-```
-1. Player walks near a mechanism and triggers a ProximityPrompt
-   (PuzzleController — client only, fires the request)
-         ↓
-2. Net.FireServer("Puzzle_Interact", mechanismId)
-         ↓
-3. PuzzleService.HandleInteract(player, mechanismId)   [server]
-   ├─ Is mechanismId a string?           → reject if not (exploit guard)
-   ├─ Does this mechanism exist?         → reject if not
-   ├─ RoleService.CanAccess(player, ...)?→ reject if wrong role
-   ├─ (Dimension check — see §4.2 ARCHITECTURE.md)
-   └─ Distance check (server re-checks!) → reject if too far
-         ↓
-4. state.activated = true
-         ↓
-5. Net.FireClients(familyPlayers, "Puzzle_MechanismUpdated", id, true)
-         ↓
-6. PuzzleService.CheckGroupCompletion()
-   └─ all mechanisms in group done?
-         └─ PuzzleService.AllGeneratorsActivated:Fire()
-               ↓
-7. GameService.HandleWin()
-   ├─ sessionStatus = "Won"
-   ├─ Net.FireClients(family, "Game_StateChanged", "Won")
-   └─ DataService: persist analytics
-```
+`RemoteEvent` instances — unchanged from v1. Gives every remote
+known-remote assertion, per-player rate limiting, and one place to add
+logging. Remote names are declared once in `Constants/RemoteNames.lua`;
+never hardcode one elsewhere. Full catalogue of every remote in this game:
+**[`docs/ARCHITECTURE.md` §7](docs/ARCHITECTURE.md#7-api-design-remote-catalogue)**.
 
 ---
 
-## 8. Adding Content (No-Code Paths)
+## 8. Adding Content (No-Code / One-File Paths)
 
-### Adding a new puzzle mechanism
+See **[`docs/ARCHITECTURE.md` §5](docs/ARCHITECTURE.md#5-adding-content--the-concrete-drop-a-folder-recipe)**
+for the full table. Quick version:
 
-You do **not** need to write any Lua code to add a mechanism. Builders do this
-entirely in Studio:
+| Want to add... | Do this |
+|---|---|
+| A **mechanism/door/lock instance** | Tag `Mechanism` in Studio + Attributes `MechanismId`, `PuzzleGroupId`, optional `RequiredRole`. No code. |
+| A **world item instance** | Tag `WorldItem` in Studio + Attributes `WorldItemId`, `ItemType`, optional `RequiredRole`. No code. |
+| A new **item type** | One file: `PlayArea/Server/Systems/ItemSystem/Items/<Name>/init.lua`. |
+| A new **skill** | One file under `SkillSystem/Skills/<Name>/init.lua` + one line in `Shared/Content/RoleDefinitions.lua`. |
+| A new **minigame** | One file under `MinigameSystem/Minigames/<Name>/init.lua`. |
+| A new **AI entity** | One file under `EntityAISystem/Entities/<Name>/init.lua`. |
+| A new **dialog tree** | One file under `DialogSystem/Dialogs/<Name>/init.lua`. |
 
-1. Select the mechanism Part/Model in the Workspace.
-2. Add the CollectionService tag: **`Mechanism`**
-   *(Plugins → Tag Editor, or use the `CollectionService` button in the
-   Properties panel)*
-3. Add these **Attributes** on the same instance:
-
-   | Attribute | Type | Example | Required? |
-   |---|---|---|---|
-   | `MechanismId` | string | `"Lever_A3"` | ✅ |
-   | `RequiredRole` | string | `"Merah"` | ✅ |
-   | `PuzzleGroupId` | string | `"Generator_A"` | ✅ |
-
-4. `PuzzleService` scans for the `Mechanism` tag on `Start()` and again when
-   new instances are added at runtime — it picks up your mechanism
-   automatically.
-
-> **If any of the three Attributes are missing**, the mechanism is skipped and
-> a warning is printed in the Output (`[PuzzleService][WARN] ... missing
-> required Attributes`). Check Output if your mechanism doesn't respond.
-
-### Adding a new journal fragment
-
-1. Tag the Part/Model with: **`JournalFragment`**
-2. Add Attribute: `FragmentId` (string, e.g. `"Fragment_07"`)
-
-`JournalService` handles the rest.
+If required Attributes are missing, the relevant System logs a `[WARN]`
+and skips the instance instead of erroring — check Output if content
+doesn't respond.
 
 ---
 
@@ -400,223 +300,175 @@ entirely in Studio:
 
 ### Luau strict typing
 
-Every module **must** start with:
-
-```lua
---!strict
-```
-
-This enables Luau's type checker, which catches wrong argument order, nil
-access, and type mismatches before runtime. This is non-negotiable because
-several people touch the same files.
+Every module **must** start with `--!strict`. Non-negotiable with several
+people touching the same files.
 
 ### Naming conventions
 
 | Thing | Convention | Example |
 |---|---|---|
-| ModuleScript / Service / Controller | PascalCase | `RoleService`, `UIController` |
+| ModuleScript / System / Controller | PascalCase | `RoleSystem`, `UIController` |
 | Local variable / function | camelCase | `playerRoles`, `assignRole` |
 | True constant | SCREAMING_SNAKE_CASE | `MAX_INTERACT_DISTANCE`, `PROFILE_STORE_NAME` |
-| Remote name | `Domain_Action` | `Puzzle_Interact`, `Dimension_RequestSwitch` |
-| **Intentionally unused variable** | `_` prefix | `_role`, `_player`, `for _key, value in` |
+| Remote name | `Domain_Action` | `Skill_Activate`, `Mechanism_Interact` |
+| **Intentionally unused variable** | `_` prefix | `_role`, `_player` |
 
-The `_` prefix tells Selene (and the next developer) *"I know this parameter exists — it's not wired up yet."*
-Remove the `_` when you implement the stub. Example:
-
-```lua
--- Stub (linter-safe)
-registry.Role.RoleAssigned:Connect(function(_role: string)
-    -- TODO: wire to HUD
-end)
-
--- After implementation — drop the underscore
-registry.Role.RoleAssigned:Connect(function(role: string)
-    playerGui.HUD.RoleLabel.Text = role
-end)
-```
-
-### Module structure template
+### GameSystem module template
 
 ```lua
 --!strict
--- ModuleName
+-- MyNewSystem
 --
--- One-line summary of what this module owns.
--- Cross-reference ARCHITECTURE.md §X if relevant.
+-- One-line summary of what this System owns.
+-- Cross-reference docs/ARCHITECTURE.md §X if relevant.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 local Log = require(ReplicatedStorage.Shared.Util.Log)
-local log = Log.new("ModuleName")
+local log = Log.new("MyNewSystem")
 
-local MyModule = {}
+local MyNewSystem = { Name = "MyNewSystem", Dependencies = {} } -- list other Systems' .Name here if you need them in Init
 
--- Module-level state (server-side only — never replicated implicitly)
-local someState: { [Player]: boolean } = {}
-
--- Injected service/controller references (set in Init, used in Start+)
-local OtherService: any
-
-function MyModule.Init(registry: { [string]: any })
-    OtherService = registry.OtherServiceKey
+function MyNewSystem.Init(registry: { [string]: any })
+    -- store references from `registry`, no cross-system calls yet
 end
 
-function MyModule.Start()
-    -- Connect events, register Net listeners here
+function MyNewSystem.Start()
+    -- connect events, register Net listeners
 end
 
-return MyModule
+return MyNewSystem
+```
+
+Drop this in `Systems/MyNewSystem/init.lua` under any place's `Server/` —
+`PluginRegistry.DiscoverAndBoot` picks it up automatically, no other file
+touched.
+
+### Content-plugin module template
+
+```lua
+--!strict
+-- MyNewItem — one-line summary.
+
+local MyNewItem = {
+    Id = "MyNewItem",
+    DisplayName = "My New Item",
+}
+
+function MyNewItem.OnInteract(player: Player, instance: Instance, context: { [string]: any }): boolean
+    -- return true if the interaction was accepted
+    return true
+end
+
+return MyNewItem
 ```
 
 ### Logging
 
-Use `Log` instead of raw `print` / `warn`:
-
 ```lua
 local Log = require(ReplicatedStorage.Shared.Util.Log)
-local log = Log.new("ServiceName")  -- one per module, at the top
+local log = Log.new("SystemName")
 
-log:Info("Something happened")          -- [HH:MM:SS][ServiceName][INFO] ...
-log:Warn("Something suspicious")        -- [HH:MM:SS][ServiceName][WARN] ...
-log:Error("Something broke")           -- [HH:MM:SS][ServiceName][ERROR] ...
+log:Info("Something happened")
+log:Warn("Something suspicious")
+log:Error("Something broke")
 ```
 
-Consistent tags make logs searchable in the Output during a live event when
-you have zero time to dig.
+### Error handling for DataStore/MemoryStore calls
 
-### Error handling for DataStore calls
-
-Wrap **all** `DataService` / `ProfileService` calls in `pcall`. A DataStore
-error must never crash a service — a family losing their progress mid-event
-is a reputational risk for a 6500-person orientation program.
-
-```lua
-local ok, result = pcall(function()
-    return DataService.GetProfile(player)
-end)
-if not ok then
-    log:Error(("GetProfile failed: %s"):format(tostring(result)))
-    return
-end
-```
+Wrap **all** `DataSystem`/`ProfileService`/`SessionAdmission` calls in
+`pcall`. A DataStore or MemoryStore error must never crash a System — a
+family losing progress mid-event is a reputational risk for a large
+orientation program.
 
 ---
 
 ## 10. CI Pipeline
 
-Every pull request and push to `main` triggers the GitHub Actions workflow
-in `.github/workflows/ci.yml`. All three checks must pass before merging.
+Every pull request and push to `main` triggers `.github/workflows/ci.yml`.
+All checks must pass before merging.
 
 | Step | Command | What fails it |
 |---|---|---|
 | Formatting | `stylua --check src/` | Any file not formatted to `stylua.toml` rules |
-| Linting | `selene src/` | Lint errors in `selene.toml` (unused vars, bad patterns) |
-| Build | `rojo build default.project.json` | Rojo cannot compile the project (syntax error, bad path, etc.) |
+| Linting | `selene src/ --allow-warnings` | Lint errors in `selene.toml` |
+| Build (Hub) | `rojo build places/hub.project.json` | Rojo cannot compile the Hub place |
+| Build (Lobby) | `rojo build places/lobby.project.json` | Rojo cannot compile the Lobby place |
+| Build (PlayArea) | `rojo build places/playarea.project.json` | Rojo cannot compile the PlayArea place |
 
-> **Don't wait for CI** — run `stylua src/` and `selene src/` locally before
-> pushing. CI failing on a formatting issue is a wasted pipeline run.
-
----
-
-## 11. Known TODOs (Active Work)
-
-These are incomplete stubs in the codebase. Each one is documented with a
-`-- TODO:` comment at the relevant site.
-
-| Location | What's missing | Owner |
-|---|---|---|
-| `PlayerService.Init` | Read `familyId` from `TeleportData` (reserved server join data) | PlayerService owner |
-| `DimensionService.RequestSwitch` | Real proximity/zone check before allowing dimension switch | DimensionService owner |
-| `PuzzleService.CheckAllGeneratorsActivated` | Compare `puzzleGroupCompletion` against the full required generator list; fire the win signal | PuzzleService owner |
-| `GameService.HandleWin` | Persist completion analytics via DataService | GameService owner |
-
-> Until `CheckAllGeneratorsActivated` is wired up, **the win signal never
-> fires** — the game cannot be won in the current build. This is the highest
-> priority unblocked item.
+> **Don't wait for CI** — run `stylua src/` and `selene src/` locally
+> before pushing.
 
 ---
 
-## 12. Team & Responsibilities
+## 11. Team & Responsibilities
 
 | Role | Responsibility |
 |---|---|
-| **Tech Lead** | Architecture ownership, code review, Net/Data layer, unblocking scripters |
-| **Server scripters** | Services under `src/ServerScriptService/Server/Services/` |
-| **Client scripters** | Controllers under `src/StarterPlayer/.../Controllers/` |
-| **Builders / level designers** | Studio tagging (mechanisms, fragments) per §7 — no Lua required |
+| **Tech Lead** | Architecture ownership, code review, Net/Registry/Session layers, unblocking scripters |
+| **System owners** | One `Systems/<Name>/` folder each (server), matching `Controllers/<Name>` (client) |
+| **Content contributors** | One content-plugin folder each (`Items/`, `Skills/`, `Minigames/`, `Entities/`, `Dialogs/`) — no need to touch the owning System's file |
+| **Builders / level designers** | Studio tagging (mechanisms, items, journal fragments, AI entities) per §8 — no Lua required |
 
 ### Review rule (non-negotiable)
 
-> Server-authoritative logic (§6.1) is a **hard blocker** in review.
-> If a PR allows the client to decide any gameplay outcome, it is rejected,
-> not merged with a comment.
+> Server-authoritative logic (§7.1) is a **hard blocker** in review.
+> If a PR allows the client to decide any gameplay outcome, it is
+> rejected, not merged with a comment.
 
 ---
 
-## 13. FAQ for Programmers
+## 12. FAQ for Programmers
 
-**Q: Where do I write my code?**  
-A: In VS Code, under `src/`. Never edit scripts directly in Roblox Studio —
-Rojo will overwrite your Studio edits the next time it syncs.
+**Q: Where do I write my code?**
+A: In VS Code, under `src/`. Never edit scripts directly in Roblox
+Studio — Rojo overwrites Studio edits on the next sync.
 
-**Q: How do I call another Service from my Service?**  
-A: Through the `registry` table injected in your `Init` function. Example:
+**Q: How do I call another System from my System?**
+A: Through the `registry` table injected in your `Init` function — same
+pattern as v1, now populated automatically by `PluginRegistry`:
 
 ```lua
-function MyService.Init(registry: { [string]: any })
-    local RoleService = registry.Role   -- use the key from init.server.lua
-    local role = RoleService.GetRole(player)
+function MySystem.Init(registry: { [string]: any })
+    local RoleSystem = registry.RoleSystem
 end
 ```
 
-Never `require` another Service's file directly — that creates brittle
-relative paths and potential circular dependencies.
+Never `require` another System's file directly.
 
-**Q: How do I send data from the server to the client?**  
-A: Use `Net.FireClient(player, RemoteNames.SomeName, data)` or
-`Net.FireClients(playerList, RemoteNames.SomeName, data)`. The remote name
-must already exist in `Constants/RemoteNames.lua`.
+**Q: I wrote a new item/skill/minigame — do I need to register it anywhere?**
+A: No. Drop the file in the right `Items/` / `Skills/` / `Minigames/` /
+`Entities/` / `Dialogs/` folder and it's picked up on next boot. If it
+doesn't show up, check Output for a `ContentRegistry` warning (usually a
+missing/duplicate `.Id`).
 
-**Q: How do I add a new RemoteEvent?**  
-1. Add the name to `Constants/RemoteNames.lua` (both key and value).
-2. Use `Net.FireServer` / `Net.OnServerEvent` / `Net.FireClient` /
-   `Net.OnClientEvent` — the Net module creates the actual `RemoteEvent`
-   instance automatically.
+**Q: How do I add a new RemoteEvent?**
+1. Add the name to `Shared/Constants/RemoteNames.lua`.
+2. Use `Net.FireServer`/`Net.OnServerEvent`/`Net.FireClient`/
+   `Net.OnClientEvent` — `Net` creates the actual `RemoteEvent` instance
+   automatically.
 
-**Q: My mechanism doesn't respond when I interact. What do I check?**  
-1. Is the instance tagged `Mechanism` in CollectionService?
-2. Does it have all three Attributes: `MechanismId`, `RequiredRole`,
-   `PuzzleGroupId`?
-3. Check the Output for `[PuzzleService][WARN] ... missing required Attributes`.
-4. Is the player's role correct for `RequiredRole`? Check
-   `[RoleService][INFO] Assigned role X to Y` in Output.
-5. Is the player close enough? `MAX_INTERACT_DISTANCE = 12` studs (in
-   `PuzzleService.lua`).
+**Q: Which place am I working in?**
+A: If it's title-screen/matchmaking, Hub. If it's role selection/ready-up,
+Lobby. Everything else (items, minigames, dialog, mechanisms, the actual
+map) is PlayArea.
 
-**Q: The game doesn't end even after all mechanisms are activated.**  
-A: `PuzzleService.CheckAllGeneratorsActivated` is a known stub (§10). The
-win signal has not been wired up yet — this is a priority TODO.
+**Q: My mechanism/item doesn't respond. What do I check?**
+1. Is it tagged correctly (`Mechanism` or `WorldItem`) in CollectionService?
+2. Does it have the required Attributes (§8)?
+3. Check Output for a `[WARN] ... missing required Attributes` line.
+4. Is the player's role correct, if `RequiredRole` is set?
 
-**Q: Can I use `FireAllClients`?**  
-A: No. Always scope broadcasts to `PlayerService.GetFamilyPlayers()` and use
-`Net.FireClients(familyPlayers, ...)`. `FireAllClients` is semantically wrong
-(other server instances don't share your RemoteEvent anyway) and is a bad
-habit.
+**Q: Can I use `FireAllClients`?**
+A: No. Always scope broadcasts to `FamilySystem.GetFamilyPlayers()` and
+use `Net.FireClients(familyPlayers, ...)`.
 
-**Q: What's a Maid? Do I need it?**  
-A: A Maid collects RBXScriptConnections and cleans them all up in one call.
-Use it in any Service that connects to `PlayerAdded`, `PlayerRemoving`, or
-Signals — to avoid memory leaks when the connection target is destroyed.
-Example:
-
-```lua
-local maid = Maid.new()
-maid:Give(Players.PlayerAdded:Connect(function(p) ... end))
--- later, on cleanup:
-maid:DoCleaning()
-```
+**Q: What's a Maid? Do I need it?**
+A: Collects `RBXScriptConnection`s and cleans them all up in one call. Use
+it in any System that connects to `PlayerAdded`/`PlayerRemoving`/Signals
+outside a per-player scope, to avoid leaks.
 
 ---
 
-*For the full data-flow walkthroughs, data models, scalability rationale, and
-build order, see [`ARCHITECTURE.md`](ARCHITECTURE.md).*
+*For the full data-flow diagrams, session-admission race-condition
+analysis, and the complete Remote catalogue, see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).*
