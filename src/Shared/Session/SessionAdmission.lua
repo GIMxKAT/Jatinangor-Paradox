@@ -53,6 +53,15 @@
 -- out of scope for this baseline — flagging it explicitly here is safer
 -- than pretending a fully self-healing distributed counter fits in a
 -- three-week build window.
+--
+-- SECOND KNOWN GAP, same reasoning: TryAdmit claims the family's own key
+-- BEFORE incrementing the shared counter (see below), so a Hub server that
+-- crashes in the narrow window between those two writes leaves a claim
+-- record with no matching counter increment behind it. A later TryAdmit for
+-- that same familyId then sees "already claimed" and returns true without
+-- ever incrementing the counter — an under-count, not an over-count, and
+-- self-heals once that claim's TTL expires. Same v1.1 reconciliation-job
+-- scope as the gap above; not solved here for the same reason.
 
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -74,8 +83,40 @@ local SessionAdmission = {}
 -- full (caller should keep the family queued in the Hub and retry later,
 -- e.g. on a short poll interval or when notified a slot may have freed).
 function SessionAdmission.TryAdmit(familyId: string): boolean
-    local admitted = false
+    -- Idempotency gate: atomically claim the family's OWN key first. Because
+    -- UpdateAsync's transform is atomic per-key, two concurrent
+    -- TryAdmit(familyId) calls for the SAME family can't both observe "no
+    -- claim yet" -- exactly one proceeds to touch the shared counter below;
+    -- the other sees the claim already exists and returns true without
+    -- incrementing anything (the "must not double-count" guarantee this
+    -- module's doc comment promises).
+    local alreadyClaimed = false
+    local claimOk, claimErr = pcall(function()
+        claimsMap:UpdateAsync(familyId, function(existing: any): any
+            if existing then
+                alreadyClaimed = true
+                return existing -- no-op: keep the existing claim/TTL as-is
+            end
+            return { admittedAt = os.time() } -- provisional; rolled back below if the counter step doesn't pan out
+        end, SessionConstants.ADMISSION_CLAIM_TTL_SECONDS)
+    end)
 
+    if not claimOk then
+        log:Error(
+            ("UpdateAsync (claim) failed for family %s: %s — treating as not admitted"):format(
+                familyId,
+                tostring(claimErr)
+            )
+        )
+        return false
+    end
+
+    if alreadyClaimed then
+        return true
+    end
+
+    -- We just reserved a brand-new claim; now try to actually take a slot.
+    local admitted = false
     local ok, err = pcall(function()
         claimsMap:UpdateAsync(
             SessionConstants.ADMISSION_COUNTER_KEY,
@@ -99,32 +140,22 @@ function SessionAdmission.TryAdmit(familyId: string): boolean
                 tostring(err)
             )
         )
+        pcall(function()
+            claimsMap:RemoveAsync(familyId)
+        end) -- roll back the provisional claim so a later retry for this family isn't blocked forever
         return false
     end
 
-    if admitted then
-        -- Per-family claim record: independent key, no contention with the
-        -- counter key or with any other family's key. Idempotency +
-        -- observability only (see module doc above) — TTL is a safety net
-        -- for ops visibility, not what the counter depends on.
-        local claimOk, claimErr = pcall(function()
-            claimsMap:SetAsync(
-                familyId,
-                { admittedAt = os.time() },
-                SessionConstants.ADMISSION_CLAIM_TTL_SECONDS
-            )
+    if not admitted then
+        -- Cap is full: roll back the provisional claim so tryStartFamily's
+        -- retry loop (Hub) can try this same family again once a slot frees.
+        pcall(function()
+            claimsMap:RemoveAsync(familyId)
         end)
-        if not claimOk then
-            log:Warn(
-                ("SetAsync (claim record) failed for family %s: %s"):format(
-                    familyId,
-                    tostring(claimErr)
-                )
-            )
-        end
+        return false
     end
 
-    return admitted
+    return true
 end
 
 -- Releases `familyId`'s slot: decrements the shared counter and removes
